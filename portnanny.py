@@ -67,17 +67,26 @@ def restart_process(config):
 
 
 def daemon_loop(configfile):
-    interval = DEFAULT_DAEMON_INTERVAL # Default interval
-    proc_status_cycles = PROC_STATUS_CHECK_CYCLES
     restart_pending_dict = {}
     while True:
         logging.debug("Restart Pending List is %s", restart_pending_dict)
         with open(configfile, 'r') as fd:
             config = yaml.full_load(fd)
-            interval = config['interval']
-            proc_status_cycles = config['statuscheckcyclecount']
+            if 'interval' in config.keys():
+                interval = config['interval']
+            else:
+                interval = DEFAULT_DAEMON_INTERVAL # Default interval
+            if 'statuscheckcyclecount' in config.keys():
+                proc_status_cycles = config['statuscheckcyclecount']
+            else:
+                proc_status_cycles = PROC_STATUS_CHECK_CYCLES # Default cycle count.
             logging.debug("Daemon interval is %d", interval)
             for i in config['ports']:
+                logging.debug("Validating entry.")
+                if type(i) is not dict or (not all(p in i.keys() for p in ['port', 'name', 'cmdline'])):
+                    logging.warning("The following entry is missing one of the following keys - port, name, cmdline.")
+                    logging.warning("The entry is: %s", i)
+                    continue
                 logging.debug("Checking port %s", i['port'])
                 proclist = get_procs(i['port'])
                 logging.info("Total processes found listening on port %s: %s", i['port'], len(proclist))
@@ -88,7 +97,11 @@ def daemon_loop(configfile):
                 if len(validproclist) == 0:
                     if i['port'] not in restart_pending_dict.keys():
                         if len(proclist) != 0:
-                            if i['kill'] is True:
+                            if 'kill' in i.keys():
+                                killflag = i['kill']
+                            else:
+                                killflag = False
+                            if killflag is True:
                                 logging.debug("Kill action is True, and non-valid processes exist.")
                                 kill_processes(proclist)
                                 logging.info("Non-valid processes killed. Running the provided command-line.")
