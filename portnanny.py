@@ -75,12 +75,12 @@ def daemon_loop(configfile):
                 validproclist = [p for p in proclist if i['name'] in p['procpath']]
                 logging.info("Valid processes found listening on port %s: %s", i['port'], len(validproclist))
                 if len(validproclist) == 0:
-                    if len(proclist) <> 0:
+                    if len(proclist) != 0:
                         if i['kill'] is True:
                             logging.debug("Kill action is True, and non-valid processes exist.")
                             kill_processes(proclist)
                             logging.info("Non-valid processes killed. Running the provided command-line.")
-                            logging.debug("Commandline is %s", i'[commandline'])
+                            logging.debug("Commandline is %s", i['commandline'])
                             restart_process(i)
                         else:
                             logging.info("Kill action is False, but non-valid processes exist.")
