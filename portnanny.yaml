@@ -1,0 +1,8 @@
+# portnanny configuration for Daemon mode.
+
+interval: 10 # Run checks every x seconds.
+ports:
+  - port: 8080
+    name: "lighttpd"
+    kill: False # If an existing process is bound to this port which does not match the name provided here, kill it.
+    commandline: echo 'Hello World!' # Command to run to restart the process.
