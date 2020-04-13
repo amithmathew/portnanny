@@ -1,12 +1,7 @@
 #!/bin/python3
 
-# PortNanny
-# Amith Mathew
-
-# Usage
-# portnanny daemon --config config.yaml
-# portnanny interactive --port=303
-# portnanny interactive --port=303 --kill
+# PortNanny - Nanny those ports like you mean it.
+# Author: Amith Mathew, 2020.
 
 
 import psutil
@@ -16,9 +11,12 @@ import sys
 from pprint import pprint
 import time
 import yaml
-import threading
+import subprocess
+import shlex
 
 DEFAULT_DAEMON_INTERVAL=30
+MAX_PROCESSES=5 # Thread pool size to kill/restart processes.
+PROC_STATUS_CHECK_CYCLES=1 # Number of cycles to keep checking output of process before failing. Set to arbitrarily high value to never retry.
 
 def get_procs(port):
     ns = psutil.net_connections()
@@ -57,16 +55,27 @@ def kill_processes(processlist):
     pass
 
 def restart_process(config):
-    pass
-
+    logging.info("Running command line: %s", config['cmdline'])
+    cmdargs = shlex.split(config['cmdline'])
+    restart_call = subprocess.Popen(cmdargs, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+    if restart_call.poll() is None:
+        return restart_call
+    else:
+        logging.info("Execution complete. Output is %s", restart_call.stdout.read())
+        logging.info("Error is %s", restart_call.stderr.read())
+    return None
 
 
 def daemon_loop(configfile):
     interval = DEFAULT_DAEMON_INTERVAL # Default interval
+    proc_status_cycles = PROC_STATUS_CHECK_CYCLES
+    restart_pending_dict = {}
     while True:
+        logging.debug("Restart Pending List is %s", restart_pending_dict)
         with open(configfile, 'r') as fd:
             config = yaml.full_load(fd)
             interval = config['interval']
+            proc_status_cycles = config['statuscheckcyclecount']
             logging.debug("Daemon interval is %d", interval)
             for i in config['ports']:
                 logging.debug("Checking port %s", i['port'])
@@ -74,24 +83,46 @@ def daemon_loop(configfile):
                 logging.info("Total processes found listening on port %s: %s", i['port'], len(proclist))
                 validproclist = [p for p in proclist if i['name'] in p['procpath']]
                 logging.info("Valid processes found listening on port %s: %s", i['port'], len(validproclist))
+
+
                 if len(validproclist) == 0:
-                    if len(proclist) != 0:
-                        if i['kill'] is True:
-                            logging.debug("Kill action is True, and non-valid processes exist.")
-                            kill_processes(proclist)
-                            logging.info("Non-valid processes killed. Running the provided command-line.")
-                            logging.debug("Commandline is %s", i['commandline'])
-                            restart_process(i)
+                    if i['port'] not in restart_pending_dict.keys():
+                        if len(proclist) != 0:
+                            if i['kill'] is True:
+                                logging.debug("Kill action is True, and non-valid processes exist.")
+                                kill_processes(proclist)
+                                logging.info("Non-valid processes killed. Running the provided command-line.")
+                                logging.debug("Commandline is %s", i['cmdline'])
+                                subprocess_d = restart_process(i)
+                                if subprocess_d is not None:
+                                    restart_pending_dict[i['port']] = { "spd": subprocess_d, "cyclecount": 0}
+                            else: # i['kill']
+                                logging.info("Kill action is False, but non-valid processes exist.")
+                                logging.info("Logging and moving on.")
+                        else: # len(proclist)
+                            logging.info("Restarting process.")
+                            logging.debug("Commandline is %s", i['cmdline'])
+                            subprocess_d = restart_process(i)
+                            if subprocess_d is not None:
+                                restart_pending_dict[i['port']] = { "spd": subprocess_d, "cyclecount": 0}
+
+                    else: # port in restart_pending_dict.keys()
+                        d = restart_pending_dict[i['port']]
+                        # Check if process completed.
+                        if d['spd'].poll() is None:
+                            if d['cyclecount']+1 > proc_status_cycles:
+                                logging.warning("Restart for port %d did not complete within %d cycles. Aborting.", i['port'], proc_status_cycles)
+                                del restart_pending_dict[i['port']]
+                            else:
+                                logging.info("Restart for port %d not yet complete this cycle.", i['port'])
+                                restart_pending_dict[i['port']]['cyclecount'] = restart_pending_dict[i['port']]['cyclecount'] + 1
                         else:
-                            logging.info("Kill action is False, but non-valid processes exist.")
-                            logging.info("Logging and moving on.")
-                    else:
-                        logging.info("Restarting process.")
-                        logging.debug("Commandline is %s", i['commandline'])
-                        restart_process(i)
-                else:
-                    logging.info("Found %s valid processes running on port %s", len(validprocs), i['port'])
-                    logging.debug("Valid processes are %s", validprocs)
+                            logging.info("Execution complete. Return Code is %d. Output is %s", d['spd'].poll(), d['spd'].stdout.read())
+                            logging.info("Error is %s", d['spd'].stderr.read())
+                            del restart_pending_dict[i['port']]
+                else: # len(validproclist)
+                    logging.info("Found %s valid processes running on port %s", len(validproclist), i['port'])
+                    logging.debug("Valid processes are %s", validproclist)
         logging.debug("Sleeping for %d seconds.\n\n", interval)
         time.sleep(interval)
 
